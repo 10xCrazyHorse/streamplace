@@ -186,6 +186,7 @@ func (a *StreamplaceAPI) Handler(ctx context.Context) (http.Handler, error) {
 	addHandle(apiRouter, "POST", "/api/playback/:user/webrtc", a.HandleWebRTCPlayback(ctx))
 	addHandle(apiRouter, "POST", "/api/ingest/webrtc", a.HandleWebRTCIngest(ctx))
 	addHandle(apiRouter, "POST", "/api/ingest/webrtc/:key", a.HandleWebRTCIngest(ctx))
+	addHandle(apiRouter, "DELETE", "/api/ingest/webrtc/:key", a.HandleWebRTCIngestDelete(ctx))
 	addHandle(apiRouter, "POST", "/api/player-event", a.HandlePlayerEvent(ctx))
 	addHandle(apiRouter, "GET", "/api/chat/:repoDID", a.HandleChat(ctx))
 	addHandle(apiRouter, "GET", "/api/websocket/:repoDID", a.HandleWebsocket(ctx))
@@ -832,5 +833,37 @@ func (t *WebsocketTracker) RemoveConnection(ip string) {
 
 	if t.connections[ip] == 0 {
 		delete(t.connections, ip)
+	}
+}
+
+// HandleWebRTCIngestDelete handles DELETE requests to stop WebRTC streams
+func (a *StreamplaceAPI) HandleWebRTCIngestDelete(ctx context.Context) httprouter.Handle {
+	return func(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+		urlKey := p.ByName("key")
+		if urlKey == "" {
+			apierrors.WriteHTTPBadRequest(w, "missing key in request", nil)
+			return
+		}
+		
+		// Verify the key is valid (authentication)
+		mediaSigner, err := a.MakeMediaSigner(ctx, urlKey)
+		if err != nil {
+			apierrors.WriteHTTPUnauthorized(w, "invalid authorization key", err)
+			return
+		}
+		
+		// Stop the WebRTC stream
+		err = a.MediaManager.StopWebRTCStream(ctx, mediaSigner.Streamer())
+		if err != nil {
+			log.Error(ctx, "error stopping WebRTC stream", "error", err, "streamer", mediaSigner.Streamer())
+			apierrors.WriteHTTPInternalServerError(w, "error stopping stream", err)
+			return
+		}
+		
+		log.Log(ctx, "WebRTC stream stopped successfully", "streamer", mediaSigner.Streamer())
+		w.WriteHeader(200)
+		if _, err := w.Write([]byte("Stream stopped successfully")); err != nil {
+			log.Error(ctx, "error writing response", "error", err)
+		}
 	}
 }

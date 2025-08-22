@@ -46,6 +46,8 @@ type MediaManager struct {
 	atsync              *atproto.ATProtoSynchronizer
 	webrtcAPI           *webrtc.API
 	webrtcConfig        webrtc.Configuration
+	webrtcStreams       map[string]context.CancelFunc
+	webrtcStreamsMutex  sync.RWMutex
 }
 
 type NewSegmentNotification struct {
@@ -113,15 +115,16 @@ func MakeMediaManager(ctx context.Context, cli *config.CLI, signer crypto.Signer
 		},
 	}
 	return &MediaManager{
-		cli:          cli,
-		replicator:   rep,
-		hlsRunning:   map[string]*M3U8{},
-		httpPipes:    map[string]io.Writer{},
-		model:        mod,
-		bus:          bus,
-		atsync:       atsync,
-		webrtcAPI:    api,
-		webrtcConfig: config,
+		cli:            cli,
+		replicator:     rep,
+		hlsRunning:     map[string]*M3U8{},
+		httpPipes:      map[string]io.Writer{},
+		model:          mod,
+		bus:            bus,
+		atsync:         atsync,
+		webrtcAPI:      api,
+		webrtcConfig:   config,
+		webrtcStreams:  map[string]context.CancelFunc{},
 	}, nil
 }
 
@@ -230,4 +233,23 @@ func ParseSegmentAssertions(ctx context.Context, mani *manifeststore.Manifest) (
 		Creator:   meta.Creator[0].Value,
 	}
 	return &out, nil
+}
+
+// StopWebRTCStream stops an active WebRTC stream for the given streamer
+func (mm *MediaManager) StopWebRTCStream(ctx context.Context, streamer string) error {
+	mm.webrtcStreamsMutex.Lock()
+	defer mm.webrtcStreamsMutex.Unlock()
+	
+	cancel, exists := mm.webrtcStreams[streamer]
+	if !exists {
+		return fmt.Errorf("no active WebRTC stream found for streamer: %s", streamer)
+	}
+	
+	// Cancel the stream context to stop the stream
+	cancel()
+	
+	// Remove from tracking
+	delete(mm.webrtcStreams, streamer)
+	
+	return nil
 }

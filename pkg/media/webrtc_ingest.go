@@ -93,23 +93,45 @@ func (mm *MediaManager) WebRTCIngest(ctx context.Context, offer *webrtc.SessionD
 	gatherComplete := rtcrec.GatheringCompletePromise(peerConnection)
 
 	ctx, cancel := context.WithCancel(ctx)
+	
+	// Register the stream for tracking and cleanup
+	mm.webrtcStreamsMutex.Lock()
+	mm.webrtcStreams[signer.Streamer()] = cancel
+	mm.webrtcStreamsMutex.Unlock()
+	
 	signerElem, err := mm.SegmentAndSignElem(ctx, signer)
 	if err != nil {
 		cancel()
+		// Cleanup stream registration on error
+		mm.webrtcStreamsMutex.Lock()
+		delete(mm.webrtcStreams, signer.Streamer())
+		mm.webrtcStreamsMutex.Unlock()
 		return nil, fmt.Errorf("failed create signer element: %w", err)
 	}
 	err = pipeline.Add(signerElem)
 	if err != nil {
 		cancel()
+		// Cleanup stream registration on error
+		mm.webrtcStreamsMutex.Lock()
+		delete(mm.webrtcStreams, signer.Streamer())
+		mm.webrtcStreamsMutex.Unlock()
 		return nil, fmt.Errorf("failed to add signer element to pipeline: %w", err)
 	}
 	signerElemPads, err := signerElem.GetPads()
 	if err != nil {
 		cancel()
+		// Cleanup stream registration on error
+		mm.webrtcStreamsMutex.Lock()
+		delete(mm.webrtcStreams, signer.Streamer())
+		mm.webrtcStreamsMutex.Unlock()
 		return nil, fmt.Errorf("failed to get signerElemPads from signer element: %w", err)
 	}
 	if len(signerElemPads) != 2 {
 		cancel()
+		// Cleanup stream registration on error
+		mm.webrtcStreamsMutex.Lock()
+		delete(mm.webrtcStreams, signer.Streamer())
+		mm.webrtcStreamsMutex.Unlock()
 		return nil, fmt.Errorf("failed to get signerElemPads from signer element")
 	}
 	signerElemVideoPad := signerElemPads[0]
@@ -117,11 +139,19 @@ func (mm *MediaManager) WebRTCIngest(ctx context.Context, offer *webrtc.SessionD
 	linked := videoSrcPad.Link(signerElemVideoPad)
 	if linked != gst.PadLinkOK {
 		cancel()
+		// Cleanup stream registration on error
+		mm.webrtcStreamsMutex.Lock()
+		delete(mm.webrtcStreams, signer.Streamer())
+		mm.webrtcStreamsMutex.Unlock()
 		return nil, fmt.Errorf("failed to link videoSrcPad to signerElemVideoPad")
 	}
 	linked = audioSrcPad.Link(signerElemAudioPad)
 	if linked != gst.PadLinkOK {
 		cancel()
+		// Cleanup stream registration on error
+		mm.webrtcStreamsMutex.Lock()
+		delete(mm.webrtcStreams, signer.Streamer())
+		mm.webrtcStreamsMutex.Unlock()
 		return nil, fmt.Errorf("failed to link audioSrcPad to signerElemAudioPad")
 	}
 
@@ -304,6 +334,11 @@ func (mm *MediaManager) WebRTCIngest(ctx context.Context, offer *webrtc.SessionD
 		if err := videoSrcElem.SetState(gst.StateNull); err != nil {
 			log.Log(ctx, "failed to set videoSrcElem state to null", "error", err)
 		}
+
+		// Unregister the stream from tracking
+		mm.webrtcStreamsMutex.Lock()
+		delete(mm.webrtcStreams, signer.Streamer())
+		mm.webrtcStreamsMutex.Unlock()
 
 		log.Log(ctx, "webrtc ingest pipeline done")
 
